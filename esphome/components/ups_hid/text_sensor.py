@@ -30,8 +30,12 @@ CONFIG_SCHEMA = cv.Schema(
 
 async def to_code(config: ConfigType) -> None:
     hub = await cg.get_variable(config[CONF_UPS_HID_ID])
-    text_sensors = text_sensor.sub_text_sensors(config)
-    await text_sensors(CONF_STATUS, hub.set_status_text_sensor)
-    await text_sensors(CONF_MODEL, hub.set_model_text_sensor)
-    await text_sensors(CONF_SERIAL, hub.set_serial_text_sensor)
-    await text_sensors(CONF_TEST_RESULT, hub.set_test_result_text_sensor)
+    # Explicit loop instead of text_sensor.sub_text_sensors(), which ESPHome 2026.9 does not have
+    for key, setter in (
+        (CONF_STATUS, hub.set_status_text_sensor),
+        (CONF_MODEL, hub.set_model_text_sensor),
+        (CONF_SERIAL, hub.set_serial_text_sensor),
+        (CONF_TEST_RESULT, hub.set_test_result_text_sensor),
+    ):
+        if (conf := config.get(key)) is not None:
+            cg.add(setter(await text_sensor.new_text_sensor(conf)))

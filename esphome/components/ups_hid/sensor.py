@@ -64,10 +64,14 @@ CONFIG_SCHEMA = cv.Schema(
 
 async def to_code(config: ConfigType) -> None:
     hub = await cg.get_variable(config[CONF_UPS_HID_ID])
-    sensors = sensor.sub_sensors(config)
-    await sensors(CONF_BATTERY_LEVEL, hub.set_battery_level_sensor)
-    await sensors(CONF_BATTERY_VOLTAGE, hub.set_battery_voltage_sensor)
-    await sensors(CONF_RUNTIME, hub.set_runtime_sensor)
-    await sensors(CONF_INPUT_VOLTAGE, hub.set_input_voltage_sensor)
-    await sensors(CONF_OUTPUT_VOLTAGE, hub.set_output_voltage_sensor)
-    await sensors(CONF_LOAD, hub.set_load_sensor)
+    # Explicit loop instead of sensor.sub_sensors(), which ESPHome 2026.9 does not have
+    for key, setter in (
+        (CONF_BATTERY_LEVEL, hub.set_battery_level_sensor),
+        (CONF_BATTERY_VOLTAGE, hub.set_battery_voltage_sensor),
+        (CONF_RUNTIME, hub.set_runtime_sensor),
+        (CONF_INPUT_VOLTAGE, hub.set_input_voltage_sensor),
+        (CONF_OUTPUT_VOLTAGE, hub.set_output_voltage_sensor),
+        (CONF_LOAD, hub.set_load_sensor),
+    ):
+        if (conf := config.get(key)) is not None:
+            cg.add(setter(await sensor.new_sensor(conf)))

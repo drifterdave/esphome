@@ -3,8 +3,9 @@ import esphome.codegen as cg
 from esphome.components import usb_host
 import esphome.config_validation as cv
 from esphome.const import CONF_COMMAND, CONF_ID, CONF_UPDATE_INTERVAL
-from esphome.core import TimePeriod
-from esphome.types import ConfigType
+from esphome.core import ID, TimePeriod
+from esphome.cpp_generator import MockObj
+from esphome.types import ConfigType, TemplateArgsType
 
 CODEOWNERS = ["@DrifterDave"]
 DEPENDENCIES = ["esp32"]
@@ -21,6 +22,7 @@ APC_BACK_UPS_PRODUCT_ID = 0x0002
 ups_hid_ns = cg.esphome_ns.namespace("ups_hid")
 UpsHid = ups_hid_ns.class_("UpsHid", usb_host.USBClient)
 UpsCommand = ups_hid_ns.enum("UpsCommand")
+UpsCommandAction = ups_hid_ns.class_("UpsCommandAction", automation.Action)
 
 COMMANDS = {
     "beeper.enable": UpsCommand.UPS_COMMAND_BEEPER_ENABLE,
@@ -58,8 +60,10 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_shutdown_delay(config[CONF_SHUTDOWN_DELAY]))
 
 
-automation.register_apply_action(
+# A plain Action class rather than register_apply_action, so this also works on ESPHome 2026.9.
+@automation.register_action(
     "ups_hid.command",
+    UpsCommandAction,
     cv.maybe_simple_value(
         {
             cv.GenerateID(CONF_ID): cv.use_id(UpsHid),
@@ -67,5 +71,16 @@ automation.register_apply_action(
         },
         key=CONF_COMMAND,
     ),
-    automation.ApplyField(CONF_COMMAND, "run_command", UpsCommand),
+    synchronous=True,
 )
+async def ups_hid_command_to_code(
+    config: ConfigType,
+    action_id: ID,
+    template_arg: cg.TemplateArguments,
+    args: TemplateArgsType,
+) -> MockObj:
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    template_ = await cg.templatable(config[CONF_COMMAND], args, UpsCommand)
+    cg.add(var.set_command(template_))
+    return var

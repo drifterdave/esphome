@@ -2,11 +2,16 @@ import re
 
 import esphome.codegen as cg
 from esphome.components import socket
-from esphome.components.const import CONF_ALLOWED_IPS, CONF_DESCRIPTION
+from esphome.components.const import CONF_DESCRIPTION
 from esphome.components.ups_hid import CONF_UPS_HID_ID, UpsHid
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from esphome.types import ConfigType
+
+try:
+    from esphome.components.const import CONF_ALLOWED_IPS
+except ImportError:  # ESPHome 2026.9 and older
+    CONF_ALLOWED_IPS = "allowed_ips"
 
 CODEOWNERS = ["@DrifterDave"]
 DEPENDENCIES = ["network", "ups_hid"]
@@ -47,7 +52,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_MAX_CLIENTS, default=4): cv.int_range(min=1, max=8),
             cv.Inclusive(CONF_USERNAME, "credentials"): _CREDENTIAL,
             cv.Inclusive(CONF_PASSWORD, "credentials"): cv.sensitive(_CREDENTIAL),
-            cv.Optional(CONF_ALLOWED_IPS): socket.IPV4_ALLOW_SCHEMA,
+            cv.Optional(CONF_ALLOWED_IPS): cv.All(
+                cv.ensure_list(cv.ipv4network), cv.Length(min=1, max=32)
+            ),
         }
     ).extend(cv.COMPONENT_SCHEMA),
     _consume_sockets,
@@ -64,4 +71,11 @@ async def to_code(config: ConfigType) -> None:
     cg.add(var.set_description(config[CONF_DESCRIPTION]))
     if (username := config.get(CONF_USERNAME)) is not None:
         cg.add(var.set_credentials(username, config[CONF_PASSWORD]))
-    socket.add_ipv4_allow(var.set_allow, config.get(CONF_ALLOWED_IPS), config[CONF_ID])
+    # Own allow list rather than socket.add_ipv4_allow(), which ESPHome 2026.9 does not have
+    if networks := config.get(CONF_ALLOWED_IPS):
+        cg.add_define("NUT_SERVER_ALLOWED_IPS_COUNT", len(networks))
+        for net in networks:
+            # s_addr layout on the little-endian targets
+            addr = int.from_bytes(net.network_address.packed, "little")
+            mask = int.from_bytes(net.netmask.packed, "little")
+            cg.add(var.add_allowed_network(addr, mask))

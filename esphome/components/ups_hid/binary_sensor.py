@@ -1,6 +1,5 @@
 import esphome.codegen as cg
 from esphome.components import binary_sensor
-from esphome.components.const import CONF_CONNECTED
 import esphome.config_validation as cv
 from esphome.const import (
     DEVICE_CLASS_BATTERY,
@@ -13,6 +12,11 @@ from esphome.const import (
 from esphome.types import ConfigType
 
 from . import CONF_UPS_HID_ID, UpsHid
+
+try:
+    from esphome.components.const import CONF_CONNECTED
+except ImportError:  # ESPHome 2026.9 and older
+    CONF_CONNECTED = "connected"
 
 DEPENDENCIES = ["ups_hid"]
 
@@ -50,10 +54,14 @@ CONFIG_SCHEMA = cv.Schema(
 
 async def to_code(config: ConfigType) -> None:
     hub = await cg.get_variable(config[CONF_UPS_HID_ID])
-    binary_sensors = binary_sensor.sub_binary_sensors(config)
-    await binary_sensors(CONF_ONLINE, hub.set_online_binary_sensor)
-    await binary_sensors(CONF_CHARGING, hub.set_charging_binary_sensor)
-    await binary_sensors(CONF_LOW_BATTERY, hub.set_low_battery_binary_sensor)
-    await binary_sensors(CONF_REPLACE_BATTERY, hub.set_replace_battery_binary_sensor)
-    await binary_sensors(CONF_OVERLOAD, hub.set_overload_binary_sensor)
-    await binary_sensors(CONF_CONNECTED, hub.set_connected_binary_sensor)
+    # Explicit loop instead of binary_sensor.sub_binary_sensors(), which ESPHome 2026.9 does not have
+    for key, setter in (
+        (CONF_ONLINE, hub.set_online_binary_sensor),
+        (CONF_CHARGING, hub.set_charging_binary_sensor),
+        (CONF_LOW_BATTERY, hub.set_low_battery_binary_sensor),
+        (CONF_REPLACE_BATTERY, hub.set_replace_battery_binary_sensor),
+        (CONF_OVERLOAD, hub.set_overload_binary_sensor),
+        (CONF_CONNECTED, hub.set_connected_binary_sensor),
+    ):
+        if (conf := config.get(key)) is not None:
+            cg.add(setter(await binary_sensor.new_binary_sensor(conf)))

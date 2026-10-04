@@ -5,8 +5,8 @@
 
 #if defined(USE_SOCKET_IMPL_LWIP_TCP) || defined(USE_SOCKET_IMPL_LWIP_SOCKETS) || defined(USE_SOCKET_IMPL_BSD_SOCKETS)
 #include "esphome/core/component.h"
-#ifdef USE_SOCKET_IPV4_ALLOW
-#include "esphome/components/socket/ipv4_allow.h"
+#ifdef NUT_SERVER_ALLOWED_IPS_COUNT
+#include "esphome/core/helpers.h"
 #endif
 #include "nut_protocol.h"
 
@@ -36,8 +36,9 @@ class NutServer : public Component, public NutHost {
     this->config_.username = username;
     this->config_.password = password;
   }
-#ifdef USE_SOCKET_IPV4_ALLOW
-  void set_allow(const socket::Ipv4AllowEntry *entries, size_t count) { this->allow_.set(entries, count); }
+#ifdef NUT_SERVER_ALLOWED_IPS_COUNT
+  /// Allow clients from one IPv4 network; both values in network byte order.
+  void add_allowed_network(uint32_t addr, uint32_t mask) { this->allowed_.push_back({addr, mask}); }
 #endif
 
   const NutConfig &get_nut_config() const override { return this->config_; }
@@ -74,8 +75,13 @@ class NutServer : public Component, public NutHost {
   std::unique_ptr<socket::ListenSocket> listen_;
   std::array<Client, NUT_SERVER_MAX_CLIENTS> clients_{};
   NutConfig config_{};
-#ifdef USE_SOCKET_IPV4_ALLOW
-  socket::Ipv4Allow allow_;
+#ifdef NUT_SERVER_ALLOWED_IPS_COUNT
+  struct AllowedNetwork {
+    uint32_t addr;
+    uint32_t mask;
+  };
+  bool is_allowed_(const struct sockaddr_storage &peer) const;
+  StaticVector<AllowedNetwork, NUT_SERVER_ALLOWED_IPS_COUNT> allowed_;
 #endif
   uint16_t port_{3493};
 };

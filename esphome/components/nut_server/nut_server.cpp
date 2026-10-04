@@ -60,11 +60,10 @@ void NutServer::dump_config() {
                 "  Instant commands: %s",
                 this->port_, this->config_.ups_name, static_cast<unsigned>(NUT_SERVER_MAX_CLIENTS),
                 this->config_.username != nullptr ? LOG_STR_LITERAL("enabled") : LOG_STR_LITERAL("disabled"));
-#ifdef USE_SOCKET_IPV4_ALLOW
-  for (size_t i = 0; i != this->allow_.size(); i++) {
-    socket::Ipv4AllowEntry entry = this->allow_.entry(i);
-    const auto *addr = reinterpret_cast<const uint8_t *>(&entry.addr);
-    const auto *mask = reinterpret_cast<const uint8_t *>(&entry.mask);
+#ifdef NUT_SERVER_ALLOWED_IPS_COUNT
+  for (const auto &net : this->allowed_) {
+    const auto *addr = reinterpret_cast<const uint8_t *>(&net.addr);
+    const auto *mask = reinterpret_cast<const uint8_t *>(&net.mask);
     ESP_LOGCONFIG(TAG, "  Allowed: %u.%u.%u.%u/%u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3], mask[0], mask[1],
                   mask[2], mask[3]);
   }
@@ -88,8 +87,8 @@ void NutServer::accept_(uint32_t now) {
       return;
     char peer[socket::SOCKADDR_STR_LEN];
     sock->getpeername_to(peer);
-#ifdef USE_SOCKET_IPV4_ALLOW
-    if (!this->allow_.allows(reinterpret_cast<struct sockaddr *>(&addr))) {
+#ifdef NUT_SERVER_ALLOWED_IPS_COUNT
+    if (!this->is_allowed_(addr)) {
       ESP_LOGW(TAG, "Rejected %s: not in allowed_ips", peer);
       continue;
     }
@@ -120,6 +119,31 @@ void NutServer::accept_(uint32_t now) {
     slot->failed = false;
   }
 }
+
+#ifdef NUT_SERVER_ALLOWED_IPS_COUNT
+bool NutServer::is_allowed_(const struct sockaddr_storage &peer) const {
+  uint32_t addr;
+  if (peer.ss_family == AF_INET) {
+    addr = reinterpret_cast<const struct sockaddr_in *>(&peer)->sin_addr.s_addr;
+#if USE_NETWORK_IPV6
+  } else if (peer.ss_family == AF_INET6) {
+    // Only IPv4 clients reaching an IPv6 socket (::ffff:a.b.c.d) can match an IPv4 network
+    static constexpr uint8_t V4_MAPPED_PREFIX[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF};
+    const uint8_t *bytes = reinterpret_cast<const struct sockaddr_in6 *>(&peer)->sin6_addr.s6_addr;
+    if (memcmp(bytes, V4_MAPPED_PREFIX, sizeof(V4_MAPPED_PREFIX)) != 0)
+      return false;
+    memcpy(&addr, bytes + sizeof(V4_MAPPED_PREFIX), sizeof(addr));
+#endif
+  } else {
+    return false;
+  }
+  for (const auto &net : this->allowed_) {
+    if ((addr & net.mask) == net.addr)
+      return true;
+  }
+  return false;
+}
+#endif
 
 void NutServer::read_(Client &client, uint32_t now) {
   char buf[128];
