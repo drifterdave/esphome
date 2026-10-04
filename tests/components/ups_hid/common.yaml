@@ -1,0 +1,66 @@
+usb_host:
+
+ups_hid:
+  - id: ups_hid_ups
+    vid: 0x051D
+    pid: 0x0002
+    update_interval: 15s
+    shutdown_delay: 30s
+
+sensor:
+  - platform: ups_hid
+    ups_hid_id: ups_hid_ups
+    battery_level:
+      name: UPS Battery
+    battery_voltage:
+      name: UPS Battery Voltage
+    runtime:
+      name: UPS Runtime
+    input_voltage:
+      name: UPS Input Voltage
+    output_voltage:
+      name: UPS Output Voltage
+    load:
+      name: UPS Load
+
+binary_sensor:
+  - platform: ups_hid
+    ups_hid_id: ups_hid_ups
+    online:
+      name: UPS Online
+    charging:
+      name: UPS Charging
+    low_battery:
+      name: UPS Low Battery
+    replace_battery:
+      name: UPS Replace Battery
+    overload:
+      name: UPS Overload
+    connected:
+      name: UPS Connected
+
+text_sensor:
+  - platform: ups_hid
+    ups_hid_id: ups_hid_ups
+    status:
+      name: UPS Status
+    model:
+      name: UPS Model
+    serial:
+      name: UPS Serial
+    test_result:
+      name: UPS Test Result
+
+button:
+  - platform: template
+    name: UPS Mute Beeper
+    on_press:
+      - ups_hid.command:
+          id: ups_hid_ups
+          command: beeper.mute
+  - platform: template
+    name: UPS Quick Test
+    on_press:
+      - ups_hid.command:
+          id: ups_hid_ups
+          command: test.battery.start.quick

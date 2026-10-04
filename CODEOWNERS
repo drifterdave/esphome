@@ -393,6 +393,7 @@ esphome/components/noise/* @esphome/core
 esphome/components/npi19/* @bakerkj
 esphome/components/nrf52/* @tomaszduda23
 esphome/components/number/* @esphome/core
+esphome/components/nut_server/* @DrifterDave
 esphome/components/one_wire/* @ssieb
 esphome/components/online_image/* @clydebarrow @guillempages
 esphome/components/opentherm/* @olegtarasov
@@ -610,6 +611,7 @@ esphome/components/ufm01/* @ljungqvist
 esphome/components/ultrasonic/* @ssieb @swoboda1337
 esphome/components/update/* @jesserockz
 esphome/components/uponor_smatrix/* @kroimon
+esphome/components/ups_hid/* @DrifterDave
 esphome/components/usb_cdc_acm/* @kbx81
 esphome/components/usb_host/* @clydebarrow
 esphome/components/usb_uart/* @clydebarrow

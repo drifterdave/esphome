@@ -1,0 +1,15 @@
+usb_host:
+
+ups_hid:
+  - id: nut_server_ups
+
+nut_server:
+  ups_hid_id: nut_server_ups
+  ups_name: apc
+  description: Rack UPS
+  port: 3493
+  max_clients: 3
+  username: monitor
+  password: secret
+  allowed_ips:
+    - 192.168.1.0/24
