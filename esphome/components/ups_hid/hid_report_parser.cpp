@@ -1,6 +1,7 @@
 #include "hid_report_parser.h"
 
 #include <cmath>
+#include <utility>
 
 namespace esphome::ups_hid {
 
@@ -56,6 +57,7 @@ constexpr FieldRule RULES[] = {
     {0, usage::OUTPUT, usage::CONFIG_ACTIVE_POWER, UPS_FIELD_REALPOWER_NOMINAL},
     {0, usage::POWER_SUMMARY, usage::AUDIBLE_ALARM_CONTROL, UPS_FIELD_BEEPER},
     {0, usage::BATTERY, usage::TEST, UPS_FIELD_TEST},
+    {0, usage::OUTPUT, usage::TEST, UPS_FIELD_TEST},  // CyberPower
     {0, 0, usage::APC_PANEL_TEST, UPS_FIELD_PANEL_TEST},
     {0, usage::POWER_SUMMARY, usage::DELAY_BEFORE_SHUTDOWN, UPS_FIELD_DELAY_SHUTDOWN},
     {0, usage::OUTPUT, usage::DELAY_BEFORE_SHUTDOWN, UPS_FIELD_DELAY_SHUTDOWN},
@@ -78,6 +80,7 @@ constexpr FieldRule RULES[] = {
     {0, usage::POWER_SUMMARY, usage::SHUTDOWN_IMMINENT, UPS_FIELD_SHUTDOWN_IMMINENT},
     {usage::POWER_SUMMARY, usage::PRESENT_STATUS, usage::NEED_REPLACEMENT, UPS_FIELD_NEED_REPLACEMENT},
     {usage::POWER_SUMMARY, usage::PRESENT_STATUS, usage::OVERLOAD, UPS_FIELD_OVERLOAD},
+    {0, usage::OUTPUT, usage::OVERLOAD, UPS_FIELD_OVERLOAD},  // CyberPower
     {usage::POWER_SUMMARY, usage::PRESENT_STATUS, usage::BATTERY_PRESENT, UPS_FIELD_BATTERY_PRESENT},
 };
 static_assert(sizeof(RULES) / sizeof(RULES[0]) < NO_RULE, "rule index must fit in uint8_t");
@@ -119,6 +122,43 @@ struct GlobalState {
   bool has_physical_max{false};
 };
 
+constexpr uint16_t CPS_VENDOR_ID = 0x0764;
+// Replacement logical maximums from NUT cps-hid.c
+constexpr int32_t CPS_VOLTAGE_LOGMAX = 511;
+constexpr int32_t CPS_NOMINAL_POWER_LOGMAX = 2048;
+constexpr int32_t CPS_BATTERY_VOLTAGE_LOGMAX = 4096;
+
+using FieldArray = std::array<HidField, UPS_FIELD_COUNT>;
+
+HidField *field_in_report(FieldArray &fields, UpsField field, uint8_t report_id) {
+  HidField &f = fields[field];
+  return f.present() && f.report_id == report_id ? &f : nullptr;
+}
+
+/// NUT cps_fix_report_desc, second pass: input and output voltage maximums that were read as unsigned
+/// (often 65535 and 255) are raised to at least 511, aligned with each other, then capped to the field width.
+void fix_cyberpower_assumed_voltage_max(HidField &input, HidField &output) {
+  int64_t input_max = input.logical_max;
+  int64_t output_max = output.logical_max;
+  if (output.logical_max_assumed && output_max < CPS_VOLTAGE_LOGMAX)
+    output_max = CPS_VOLTAGE_LOGMAX;
+  if (input.logical_max_assumed && input_max < CPS_VOLTAGE_LOGMAX)
+    input_max = CPS_VOLTAGE_LOGMAX;
+  if (output.logical_max_assumed && output_max < input_max) {
+    output_max = input_max;
+  } else if (input.logical_max_assumed && input_max < output_max) {
+    input_max = output_max;
+  }
+  auto cap = [](const HidField &field, int64_t max) {
+    if (!field.logical_max_assumed || field.bit_size <= 1)
+      return max;
+    int64_t width_max = (int64_t{1} << field.bit_size) - 1;
+    return max > width_max ? width_max : max;
+  };
+  input.logical_max = static_cast<int32_t>(cap(input, input_max));
+  output.logical_max = static_cast<int32_t>(cap(output, output_max));
+}
+
 struct ReportCursor {
   uint16_t bits;
   uint8_t type;
@@ -127,7 +167,7 @@ struct ReportCursor {
 
 class Parser {
  public:
-  explicit Parser(HidFieldMap &out) : out_(out) {
+  Parser(HidFieldMap &out, uint16_t vid, uint16_t pid) : out_(out), vid_(vid), pid_(pid) {
     this->best_input_.fill(NO_RULE);
     this->best_feature_.fill(NO_RULE);
   }
@@ -295,8 +335,9 @@ class Parser {
     ReportCursor *cursor = this->cursor_(type, g.report_id);
     if (cursor == nullptr)
       return HID_PARSE_RESULT_TOO_MANY_REPORTS;
-    // Constant fields are padding; array fields carry selectors, not values.
-    bool is_value = (flags & 0x01) == 0 && (flags & 0x02) != 0;
+    // Array fields carry selectors, not values. The Constant flag is not checked: CyberPower marks its values
+    // Constant, and padding has no usage, so it never matches a rule.
+    bool is_value = (flags & 0x02) != 0;
     if (is_value && type != HID_REPORT_TYPE_OUTPUT && g.report_size != 0 && g.report_size <= 32) {
       for (uint16_t i = 0; i != g.report_count; i++)
         this->record_(type, this->usage_at_(i), cursor->bits + i * g.report_size);
@@ -334,7 +375,8 @@ class Parser {
       f = HidField{};
       f.logical_min = g.logical_min;
       // Devices often encode an unsigned maximum such as 0xFF in one byte; reinterpret it like NUT does.
-      f.logical_max = g.logical_max < g.logical_min ? static_cast<int32_t>(g.logical_max_raw) : g.logical_max;
+      f.logical_max_assumed = g.logical_max < g.logical_min;
+      f.logical_max = f.logical_max_assumed ? static_cast<int32_t>(g.logical_max_raw) : g.logical_max;
       f.has_physical = g.has_physical_min && g.has_physical_max && (g.physical_min != 0 || g.physical_max != 0);
       f.physical_min = g.physical_min;
       f.physical_max = g.physical_max;
@@ -371,6 +413,10 @@ class Parser {
       if (bytes > this->out_.max_input_report_bytes)
         this->out_.max_input_report_bytes = bytes;
     }
+    if (this->vid_ == CPS_VENDOR_ID && (this->pid_ == 0x0501 || this->pid_ == 0x0601)) {
+      this->fix_cyberpower_();
+      return;
+    }
     // Some APC units (NUT apc_fix_report_desc) give an input voltage range below the high transfer point,
     // which would clamp every reading in 230 V regions. Widen it the same way NUT does.
     const HidField &high = this->out_.feature[UPS_FIELD_INPUT_TRANSFER_HIGH];
@@ -388,6 +434,46 @@ class Parser {
     }
   }
 
+  /// NUT cps_fix_report_desc: CyberPower descriptors give logical ranges that cut off real values.
+  /// Like NUT, each fix applies only to a field in the report ID where the bug has been seen.
+  void fix_cyberpower_() {
+    const HidField *high = field_in_report(this->out_.feature, UPS_FIELD_INPUT_TRANSFER_HIGH, 0x10);
+    if (high == nullptr)
+      high = field_in_report(this->out_.input, UPS_FIELD_INPUT_TRANSFER_HIGH, 0x10);
+    for (auto *fields : {&this->out_.input, &this->out_.feature}) {
+      HidField *output = field_in_report(*fields, UPS_FIELD_OUTPUT_VOLTAGE, 0x12);
+      HidField *input = field_in_report(*fields, UPS_FIELD_INPUT_VOLTAGE, 0x0F);
+      if (high != nullptr) {
+        // Some models copy the high transfer point's range onto output voltage.
+        if (output != nullptr && output->logical_min == high->logical_min && output->logical_max == high->logical_max) {
+          output->logical_min = 0;
+          output->logical_max = CPS_VOLTAGE_LOGMAX;
+        }
+        if (input != nullptr && !input->has_physical &&
+            ((input->logical_min == high->logical_min && input->logical_max == high->logical_max) ||
+             high->logical_max > input->logical_max)) {
+          input->logical_min = 0;
+          input->logical_max = CPS_VOLTAGE_LOGMAX;
+        }
+        HidField *nominal = field_in_report(*fields, UPS_FIELD_INPUT_VOLTAGE_NOMINAL, 0x0E);
+        if (nominal != nullptr && !nominal->has_physical && high->logical_max > nominal->logical_max)
+          nominal->logical_max = 255;
+      }
+      if (output != nullptr && input != nullptr && (output->logical_max_assumed || input->logical_max_assumed))
+        fix_cyberpower_assumed_voltage_max(*input, *output);
+      HidField *power = field_in_report(*fields, UPS_FIELD_REALPOWER_NOMINAL, 0x18);
+      if (power != nullptr && power->logical_max < CPS_NOMINAL_POWER_LOGMAX)
+        power->logical_max = CPS_NOMINAL_POWER_LOGMAX;
+      // Some models send a 48 V battery as 480 (0.1 V units) with a logical maximum of 255.
+      for (auto [field, report_id] : {std::pair{UPS_FIELD_BATTERY_VOLTAGE, uint8_t{0x0A}},
+                                      std::pair{UPS_FIELD_BATTERY_VOLTAGE_NOMINAL, uint8_t{0x09}}}) {
+        HidField *battery = field_in_report(*fields, field, report_id);
+        if (battery != nullptr && !battery->has_physical && battery->logical_max < CPS_BATTERY_VOLTAGE_LOGMAX)
+          battery->logical_max = CPS_BATTERY_VOLTAGE_LOGMAX;
+      }
+    }
+  }
+
   HidFieldMap &out_;
   GlobalState global_{};
   std::array<GlobalState, MAX_GLOBAL_PUSH> push_stack_{};
@@ -399,6 +485,8 @@ class Parser {
   uint32_t usage_min_{0};
   uint32_t usage_max_{0};
   size_t report_count_{0};
+  uint16_t vid_;
+  uint16_t pid_;
   uint8_t push_depth_{0};
   uint8_t depth_{0};
   uint8_t usage_count_{0};
@@ -479,9 +567,12 @@ int32_t HidField::to_logical(float physical) const {
   // Without a physical range the value goes out as is, so -1 (cancel) becomes all ones, as with NUT.
   if (!this->has_physical || this->physical_max <= this->physical_min || this->logical_max <= this->logical_min)
     return static_cast<int32_t>(std::lround(value));
-  auto result = std::lround(this->logical_min + (value - this->physical_min) *
-                                                    (static_cast<double>(this->logical_max) - this->logical_min) /
-                                                    (static_cast<double>(this->physical_max) - this->physical_min));
+  // Truncate the scaled offset before adding logical_min, as NUT does. With a range of -1..32767 minutes over
+  // -60..1966020 s (CyberPower), -1 s (cancel) then becomes -1 instead of rounding to 0 (shut down now).
+  auto result =
+      static_cast<int64_t>((value - this->physical_min) * (static_cast<double>(this->logical_max) - this->logical_min) /
+                           (static_cast<double>(this->physical_max) - this->physical_min)) +
+      this->logical_min;
   if (result < this->logical_min)
     return this->logical_min;
   if (result > this->logical_max)
@@ -489,9 +580,9 @@ int32_t HidField::to_logical(float physical) const {
   return static_cast<int32_t>(result);
 }
 
-HidParseResult parse_report_descriptor(const uint8_t *desc, size_t len, HidFieldMap &out) {
+HidParseResult parse_report_descriptor(const uint8_t *desc, size_t len, HidFieldMap &out, uint16_t vid, uint16_t pid) {
   out = HidFieldMap{};
-  Parser parser(out);
+  Parser parser(out, vid, pid);
   return parser.parse(desc, len);
 }
 

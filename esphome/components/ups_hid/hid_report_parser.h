@@ -107,6 +107,8 @@ struct HidField {
   uint8_t report_id{0};
   int8_t unit_exponent{0};
   bool has_physical{false};
+  /// logical_max was encoded below logical_min and has been read as unsigned (NUT assumed_LogMax).
+  bool logical_max_assumed{false};
 
   bool present() const { return this->bit_size != 0; }
   /// Read the logical value from a report buffer (starting with the report ID byte when report_id is not 0).
@@ -142,6 +144,8 @@ enum HidParseResult : uint8_t {
 };
 
 /// Parse a HID report descriptor and record the location of every known UPS field.
-HidParseResult parse_report_descriptor(const uint8_t *desc, size_t len, HidFieldMap &out);
+/// The vendor and product IDs select fixes for descriptors that some models get wrong.
+HidParseResult parse_report_descriptor(const uint8_t *desc, size_t len, HidFieldMap &out, uint16_t vid = 0,
+                                       uint16_t pid = 0);
 
 }  // namespace esphome::ups_hid

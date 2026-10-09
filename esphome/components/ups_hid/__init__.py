@@ -15,7 +15,8 @@ MULTI_CONF = True
 CONF_UPS_HID_ID = "ups_hid_id"
 CONF_SHUTDOWN_DELAY = "shutdown_delay"
 
-# APC Back-UPS family, including the Back-UPS ES 600M1 (BE600M1)
+# Default device: APC Back-UPS family, including the Back-UPS ES 600M1 (BE600M1).
+# For CyberPower set vid 0x0764 and pid 0x0501 (most desktop models) or 0x0601.
 APC_VENDOR_ID = 0x051D
 APC_BACK_UPS_PRODUCT_ID = 0x0002
 

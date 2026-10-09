@@ -61,6 +61,8 @@ class UpsState {
   bool command_supported(UpsCommand command) const;
   uint32_t get_shutdown_delay() const { return this->shutdown_delay_; }
 
+  uint16_t get_vid() const { return this->vid_; }
+  uint16_t get_pid() const { return this->pid_; }
   const char *get_manufacturer() const { return this->manufacturer_; }
   const char *get_model() const { return this->model_; }
   const char *get_serial() const { return this->serial_; }

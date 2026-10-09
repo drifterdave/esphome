@@ -35,6 +35,8 @@ static void descriptor_to_ascii(const usb_str_desc_t *desc, char *buf, size_t le
     size_t chars = (desc->bLength - 2) / 2;
     for (size_t i = 0; i != chars && pos + 1 < len; i++) {
       uint16_t c = desc->wData[i];
+      if (c == 0)
+        break;  // CyberPower pads the product string with NULs
       buf[pos++] = c >= 0x20 && c < 0x7F ? static_cast<char>(c) : '?';
     }
   }
@@ -375,7 +377,16 @@ void UpsHid::on_descriptor_read_(const uint8_t *data, size_t len) {
   if (len < this->report_descriptor_length_) {
     ESP_LOGW(TAG, "Report descriptor truncated: %zu of %u bytes", len, this->report_descriptor_length_);
   }
-  HidParseResult result = parse_report_descriptor(data, len, this->fields_);
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
+  // Raw descriptor, for diagnosing devices whose values are not found
+  static constexpr size_t DUMP_BYTES_PER_LINE = 32;
+  for (size_t offset = 0; offset < len; offset += DUMP_BYTES_PER_LINE) {
+    char hex[DUMP_BYTES_PER_LINE * 2 + 1];
+    size_t count = std::min(DUMP_BYTES_PER_LINE, len - offset);
+    ESP_LOGV(TAG, "Descriptor %04zX: %s", offset, format_hex_to(hex, data + offset, count));
+  }
+#endif
+  HidParseResult result = parse_report_descriptor(data, len, this->fields_, this->ups_.get_vid(), this->ups_.get_pid());
   if (result != HID_PARSE_RESULT_OK) {
     ESP_LOGE(TAG, "Report descriptor parse failed (%u)", result);
     this->stage_ = UPS_HID_STAGE_FAILED;

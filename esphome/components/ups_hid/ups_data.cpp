@@ -197,6 +197,9 @@ void UpsState::set_identity(uint16_t vid, uint16_t pid, const char *manufacturer
 }
 
 void UpsState::set_value(UpsField field, float value) {
+  // Some CyberPower units report a charge above 100 % (NUT cps_battcharge_fun)
+  if (field == UPS_FIELD_BATTERY_CHARGE && value > 100.0f)
+    value = 100.0f;
   this->values_[field] = value;
   this->valid_mask_ |= 1u << field;
 }
